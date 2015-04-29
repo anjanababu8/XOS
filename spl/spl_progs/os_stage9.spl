@@ -1,0 +1,96 @@
+load(7,1);	// EXCEPTION HANDLER
+load(8,2);
+
+load(9,3);	// TIMER INTERRUPT
+load(10,4);
+
+load(11,5);	// FILE SYSTEM INTERRUPT ROUTINES 
+load(12,6);	// Only 2 pages for each interrupts => max 512 XSM instruction => 512 * 2 words
+load(13,7);
+load(14,8);
+load(15,9);
+load(16,10);
+load(17,11);
+load(18,12);
+
+load(19,13);	//PROCESS INTERRUPT ROUTINES
+load(20,14);
+load(21,15);
+load(22,16);
+load(23,17);
+load(24,18);
+load(23,17);
+load(24,18);
+
+load(5,19);	// FAT and DFL
+load(6,20);
+
+load(25,21);	// INIT process to main memory (4 PAGES = 3 CODE + 1 STACK)
+load(26,22);
+load(27,23);
+
+//SETTING UP THE INIT PROCESS
+[READY_LIST + 0] = 0;				// PID of INIT process = 0
+[READY_LIST + 31] = 0;				// STAGE 11 : SETTING PARENT PID OF INIT PROCESS AS 0 => PARENT itself
+
+PTBR = PAGE_TABLE;
+PTLR = 4;
+						// Setting page table entries (4 entries) - REFERENCE BIT, VALID BIT
+[PTBR + 0] = 25;				// Physical Page Number for Logical Page 0
+[PTBR + 1] = "01";				// Auxiliary Information for Logical Page 0
+
+[PTBR + 2] = 26;
+[PTBR + 3] = "01";
+
+[PTBR + 4] = 27;
+[PTBR + 5] = "01";
+
+[PTBR + 6] = 28;				// Stack
+[PTBR + 7] = "01";
+
+[READY_LIST + 1] = 2;			        // Set process as RUNNING
+
+SP = 3 * 512;					// Set stack to 4th page(like user mode)
+
+[28 * 512] = 0;					// Sets up IP value to 0-that is top of the stack to 0
+
+
+alias counter S0;
+//INITIALIZING PPOFT of INIT PROCESS(the only process loaded by OS)
+counter = 0;
+while(counter<8) do 					// 8 PPOFT entries 
+	[READY_LIST + 15 + counter*2]	    = -1;	// Pointer to SWOFT set invalid(-1)
+	[READY_LIST + 15 + counter*2 + 1] = -1;		// LSEEK set invalid(-1)
+	counter = counter + 1;
+endwhile;
+
+//INITIALIZING SWOFT
+counter = 0;
+while(counter < 128) do				// 64 SWOFT entries each of 2 words
+	[FILE_TABLE + counter + 0] = -1;	// FAT index to -1 (invalid)
+	[FILE_TABLE + counter + 1] = 0;		// File Open Count to 0 (as no files opened)
+	counter = counter + 2;			// increment by 2 words to move to next entry
+endwhile;
+
+//INITIALIZING MEMORY FREE LIST
+alias MFLcount S1;
+MFLcount = 0;
+
+//***0-24 && 25-28 for INIT process**//
+while(MFLcount<64) do
+	if(MFLcount <= 28) then
+		[MEM_LIST + MFLcount] = 1; 			// used
+	else
+		[MEM_LIST + MFLcount] = 0;			// unused
+	endif;
+	MFLcount = MFLcount + 1;
+endwhile;
+
+//INITIALIZING PCBs i.e setting all the PCB state to 0 => it is free(terminated) - helps in searching or free PCB
+alias PCBcount S2;
+PCBcount = 1;
+while(PCBcount<32) do
+	[READY_LIST + PCBcount*32 + 1] = 0;
+	PCBcount = PCBcount + 1;
+endwhile;
+ireturn;

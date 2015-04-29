@@ -1,0 +1,56 @@
+//Loading Exception Handler(halts the machine)
+breakpoint;
+load(7,1);
+load(8,2);
+
+load(23,17);
+load(24,18);
+
+//Setting PID of INIT process to 0
+[READY_LIST + 0] = 0;
+
+//Loading INIT process 
+load(25,21);
+load(26,22);
+load(27,23);
+
+PTBR = PAGE_TABLE;
+PTLR = 4;
+
+//Setting up page table entries
+[PTBR + 0] = 25;
+[PTBR + 1] = "01";
+
+[PTBR + 2] = 26;
+[PTBR + 3] = "01";
+
+[PTBR + 4] = 27;
+[PTBR + 5] = "01";
+
+[PTBR + 6] = 28;
+[PTBR + 7] = "01";
+
+//Set process as running
+[READY_LIST + 1] = 2;
+
+breakpoint;
+//Set stack(like user mode)
+SP = 3 * 512;
+
+breakpoint;
+//sets up IP value to 0
+[28 * 512] = 0;
+
+// Load Interrupt 1 Routine from disk to memory
+load (11, 5);
+load (12, 6);
+
+//load time interrupt code
+load (9, 3);
+load (10, 4);
+
+//FAT and DFL
+load(5,19);
+load(6,20);
+
+ireturn;

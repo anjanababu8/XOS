@@ -1,0 +1,158 @@
+alias physicalSP S0;
+alias sysCallNo S1;
+alias fileName S2;
+alias FATindex S3;
+alias basicBlock S4;
+alias codeBlocks S5;
+alias i S6;
+alias codePages S7;
+alias more S8;
+alias currentPID S9;
+alias currentPCB S10;
+alias SWOFTindex S11;
+alias j S12;
+alias pid S13;
+alias ppid S14;
+
+
+physicalSP = [PTBR + 2*SP/512]*512 + SP%512;
+sysCallNo = [physicalSP - 1];
+
+currentPID = (PTBR - 1024)/8;
+currentPCB = READY_LIST + currentPID*32;
+
+if(sysCallNo == 9) then					//exec("filename")
+	// 1. Search for the file in FAT
+	fileName = [physicalSP - 3];
+	FATindex = 0;
+
+	while(FATindex<64 && [FAT + FATindex*8]!=fileName) do
+		FATindex = FATindex + 1;
+	endwhile;
+
+	if(FATindex==64) then
+		[physicalSP - 2] = -1;
+		ireturn;
+	endif;
+
+	// 2. Get the number of codeblocks
+	basicBlock = [FAT + FATindex*8 + 2];
+	load(1,basicBlock);                   // to find the datablock=>code blocks of new process
+
+	codeBlocks = 0;
+	i = 0;
+	while(i < 256) do 
+		if([512 + i] != -1 && [512 + i] != "") then
+			codeBlocks = codeBlocks + 1;
+		endif;
+		i = i + 1;
+	endwhile;
+
+	// maximum 3 code blocks for .exe files
+	if( codeBlocks > 3) then
+		[physicalSP - 2] = -1;
+		ireturn;
+	endif;
+
+	// 3. Get the number of valid code pages(excluding stack)
+	codePages = 0;
+	i = 0;
+	while(i<3) do
+		if([PTBR + i*2 + 1] == 01 || [PTBR + i*2 + 1] == 11) then
+			codePages = codePages + 1;
+		endif;
+		i = i + 1;
+	endwhile;
+
+
+	// 4. Adjust the necessary pages
+	if(codePages > codeBlocks) then
+		i = 2;
+		j = 0;
+		more = codePages - codeBlocks;
+		while(j < more) do
+			if([PTBR + i*2 + 0] != -1) then 
+				[MEM_LIST + [PTBR + i*2]] = 0;
+				[PTBR + i*2 + 0] = -1;
+ 				[PTBR + i*2 + 1] = "00";
+			endif;
+			i = i - 1;
+			j = j + 1;
+		endwhile;
+	endif;
+	if(codePages < codeBlocks) then
+		more = codeBlocks - codePages;
+		i = 0;
+		while(more > 0) do
+			while(i < 64 && [MEM_LIST + i]!=0) do
+				i = i+1;
+			endwhile;
+			if(i == 64) then
+				[physicalSP - 2] = -1;
+				ireturn;
+			else
+				j = 0;
+				while(j<3 && [PTBR + j*2] != -1) do
+					j = j + 1;
+				endwhile;
+
+				[MEM_LIST + i ] = 1;
+				[PTBR + j*2 + 0] = i;
+				[PTBR + j*2 + 1] = "01";
+			endif;
+			more = more-1;
+		endwhile;
+	endif;
+	
+	// 5. Load the blocks of file to current process's memory
+	j = 0;
+	while(j<3) do
+		if([PTBR + 2*j] != -1) then
+			i = 0;
+			while(i<256) do
+				if([512 + i]!=-1) then
+					load([PTBR + i*2],[512 + i]);
+					break;
+				endif;
+				i = i + 1;
+			endwhile;
+		endif;
+		j = j + 1;
+	endwhile;
+
+	// 6. Close files opened by current process
+	currentPID = (PTBR - 1024)/8;
+	currentPCB = READY_LIST + currentPID*32;
+	
+	i = 0;
+	while(i<8) do
+		SWOFTindex = [currentPCB + 15 + i*2];
+		if ( SWOFTindex != -1) then 
+			[FILE_TABLE + SWOFTindex*2 + 1] = [FILE_TABLE + SWOFTindex*2 + 1] - 1;
+			if ([FILE_TABLE + SWOFTindex*2 + 1] == 0) then
+				[FILE_TABLE + SWOFTindex*2] = -1;			// Invalidate the entry if count becomes 0	
+			endif;
+			
+			//Invalidate the PPOFT entries
+			[currentPCB + 15 + i*2 + 0] = -1;			
+			[currentPCB + 15 + i*2 + 1] = -1;
+		endif;
+		i = i + 1;
+	endwhile;
+
+	// 7. Set SP
+	SP = 3*512;
+	physicalSP = ([PTBR + 2 * (SP / 512)] * 512) + (SP % 512);
+	[physicalSP]=0;							// IP = 0
+	ireturn;
+endif;
+
+if( sysCallNo == 11) then
+	[physicalSP - 2] = currentPID;
+	ireturn;
+endif;
+
+if( sysCallNo == 12) then	
+	[physicalSP - 2] = [currentPCB + 31] ;
+	ireturn;
+endif;

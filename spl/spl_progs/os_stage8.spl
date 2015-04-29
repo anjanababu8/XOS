@@ -1,0 +1,74 @@
+//Loading Exception Handler(halts the machine)
+load(7,1);
+load(8,2);
+
+load(23,17);
+load(24,18);
+
+//Setting up the INIT process
+[READY_LIST + 0] = 0;				// PID of INIT process = 0
+
+load(25,21);					// Loading INIT process to main memory (4 PAGES = 3 CODE + 1 STACK)
+load(26,22);
+load(27,23);
+
+PTBR = PAGE_TABLE;
+PTLR = 4;
+						// Setting page table entries (4 entries) - REFERENCE BIT, VALID BIT
+[PTBR + 0] = 25;				// Physical Page Number for Logical Page 0
+[PTBR + 1] = "01";				// Auxiliary Information for Logical Page 0
+
+[PTBR + 2] = 26;
+[PTBR + 3] = "01";
+
+[PTBR + 4] = 27;
+[PTBR + 5] = "01";
+
+[PTBR + 6] = 28;				// Stack
+[PTBR + 7] = "01";
+
+[READY_LIST + 1] = 2;			        // Set process as RUNNING
+
+SP = 3 * 512;					// Set stack to 4th page(like user mode)
+
+[28 * 512] = 0;					// Sets up IP value to 0-that is top of the stack to 0
+
+//Loading FILE SYSTEM INTERRUPT ROUTINES from disk to memory
+// Only 2 pages for each interrupts => max 512 XSM instruction => 512 * 2 words
+load (11, 5);
+load (12, 6);
+
+load (13,7);
+load (14,8);
+
+load (15,9);
+load (16,10);
+
+load (17,11);
+load (18,12);
+
+//Loading TIMER INTERRUPT
+load (9,3);
+load (10,4);
+
+//Loading FAT and DFL
+load (5,19);
+load (6,20);
+
+//Initialising SWOFT
+alias counter S0;
+counter = 0;
+while(counter < 128) do				// 64 SWOFT entries each of 2 words
+	[FILE_TABLE + counter + 0] = -1;	// FAT index to -1 (invalid)
+	[FILE_TABLE + counter + 1] = 0;		// File Open Count to 0 (as no files opened)
+	counter = counter + 2;			// increment by 2 words to move to next entry
+endwhile;
+
+//Initialising the PPOFT entries of INIT process(the only process loaded by OS)
+counter = 0;
+while(counter<8) do 					// 8 PPOFT entries 
+	[READY_LIST + 15 + counter*2]	    = -1;	// Pointer to SWOFT set invalid(-1)
+	[READY_LIST + 15 + counter*2 + 1] = -1;		// LSEEK set invalid(-1)
+	counter = counter + 1;
+endwhile;
+ireturn;

@@ -1,0 +1,126 @@
+alias physicalSP S0;
+alias fileDescriptor S1;
+alias newLseek S2; 
+alias currentPID S3;
+alias currentPCB S4;
+alias SWOFTindex S5;
+alias fileSize S6;
+alias Lseek S7;
+alias basicBlock S8;
+alias BBindex S9;
+alias dataBlock S10;
+alias wordRead S11;
+alias sysCallNo S12;
+alias FATindex S13;
+alias offset S14;
+
+physicalSP = ([PTBR + 2 * (SP/512)]*512) + SP % 512;
+sysCallNo  = [physicalSP - 1];
+
+// changes the Lseek value to new value if its valid( lies within the file )
+if( sysCallNo == 6 ) then					// SEEK(fd,newLseek)
+	newLseek       = [physicalSP - 3];
+	fileDescriptor = [physicalSP - 4];
+
+	// 1. Validate filedescriptor
+	if( fileDescriptor< 0 || fileDescriptor>7) then
+		[physicalSP - 2] = -1;
+		ireturn;
+	endif;
+	
+	// 2. Index into PPOFT and validate SWOFTindex
+	currentPID = (PTBR - 1024)/8;
+	currentPCB = READY_LIST + currentPID*32;
+
+	if( [currentPCB + 15 + fileDescriptor*2 + 0] == -1) then
+		[physicalSP - 2] = -1;
+		ireturn;
+	else
+		SWOFTindex = [currentPCB + 15 + fileDescriptor*2 + 0];
+	endif;
+
+	// 3. Index into SWOFT to get the FATindex
+	FATindex = [FILE_TABLE + SWOFTindex*2 + 0];
+	
+	// 4. Fetch the file size from FAT 
+	fileSize = [FAT + FATindex*8 + 1];
+
+
+	// 5. Validate the newLseek => if YES then change the LSEEK in PPOFT 
+	if( newLseek<0 || newLseek>fileSize) then 
+		[physicalSP - 2] = -1;
+		ireturn;
+	else 
+		[currentPCB + 15 + fileDescriptor*2 + 1] = newLseek;
+		[physicalSP - 2] = 0;
+		ireturn;		
+	endif;
+endif;
+
+if( sysCallNo == 7 ) then 					// READ(fd,wordRead)
+	fileDescriptor = [physicalSP - 4];
+
+	// 1. Validate filedescriptor
+	if( fileDescriptor<0 || fileDescriptor>7) then
+		[physicalSP - 2] = -1;
+		ireturn;
+	endif;
+	
+	// 2. Index into PPOFT and validate the SWOFTindex
+	currentPID = (PTBR - 1024)/8;
+	currentPCB = READY_LIST + currentPID*32;
+
+	SWOFTindex = [currentPCB + 15 + fileDescriptor*2 + 0];
+	Lseek      = [currentPCB + 15 + fileDescriptor*2 + 1];
+	
+	if( SWOFTindex == -1 ) then
+		[physicalSP - 2] = -1;
+		ireturn;		
+	endif;
+
+	// 3. Index into SWOFT and get FATindex
+	FATindex = [FILE_TABLE + SWOFTindex*2 + 0];
+	
+	// 4. Index into FAT , validate Lseek and get the basic block and load it to SCRATCHPAD
+
+	fileSize = [FAT + FATindex*8 + 1];
+	basicBlock = [FAT + FATindex*8 + 2];
+
+	if ( Lseek == -1 || Lseek == fileSize ) then  		// Validate Lseek
+		[physicalSP - 2] = -1;
+		ireturn;
+	endif;
+	
+	// 5. Load basic Block to SCRATCHPAD
+	load( 1, basicBlock );
+	 
+	// 6. Find the DATA block to write
+	BBindex = Lseek/512;						
+	dataBlock = [SCRATCHPAD + BBindex];			// Data block number from which we have to read	
+	
+	// 7. Validate dataBlock => If -1 then cant read else fetch the block from disk and load to scratchpad
+	if ( dataBlock == -1) then 	
+		[physicalSP - 2] = -1;
+		ireturn;
+	else 
+		load( 1, dataBlock );
+	endif;
+	
+	// 8. Read from the datablock using the offset calculated from Lseek
+	offset = Lseek % 512;
+	wordRead = [SCRATCHPAD + offset];
+
+	// 9. Store the word on stack
+	[physicalSP - 3] = wordRead;
+	
+	// 10. Increment Lseek in PPOFT (as a word is read so it should point to next word);
+	[currentPCB + 15 + fileDescriptor*2 + 1] = [currentPCB + 15 + fileDescriptor*2 + 1] + 1;
+
+	[physicalSP - 2] = 0;
+	ireturn;
+endif;
+
+
+		
+
+

@@ -1,0 +1,96 @@
+alias physicalSP S0;
+alias sysCallNo S1;
+alias fileDescriptor S2;
+alias wordToWrite S3;
+alias SWOFTindex S4;
+alias LSeek S5;
+alias basicBlock S6;
+alias BBindex S7;
+alias dataBlock S8;
+alias DFLindex S9;
+alias offset S10;
+alias currentPID S11;
+alias currentPCB S12;
+alias FATindex S13;
+
+physicalSP = ([PTBR + 2*(SP/512)]*512) + (SP % 512);
+sysCallNo = [physicalSP - 1];
+
+if( sysCallNo == 5) then 					//	WRITE( fd, wordToWrite )
+	wordToWrite = [physicalSP - 3];				// To identify the open instance to write
+	fileDescriptor = [physicalSP - 4];			// To be written at the LSEEK position
+
+	// 1. Validate fileDescriptor	
+	if( fileDescriptor <0 || fileDescriptor >7) then
+		[physicalSP - 2] = -1;
+		ireturn; 
+	endif;
+
+	// 2. Index into PPOFT and Get the SWOFTindex and LSEEK
+	currentPID = (PTBR - 1024)/8;
+	currentPCB = READY_LIST + currentPID * 32;
+	
+	if ( [currentPCB + 15 + fileDescriptor*2 + 0] == -1) then	// Invalid SWOFTindex
+		[physicalSP - 2] = -1;
+		ireturn; 
+	else
+		SWOFTindex = [currentPCB + 15 + fileDescriptor*2 + 0];
+		LSeek      = [currentPCB + 15 + fileDescriptor*2 + 1];
+	endif;
+	
+	// 3. Index into SWOFT and Get the FATindex
+	FATindex = [FILE_TABLE + SWOFTindex*2 + 0];
+
+	// 4. Index into FAT table and Get the Basic Block Num
+	basicBlock = [FAT + FATindex*8 + 2];
+
+	// 5. Load basic Block to SCRATCHPAD
+	load( 1, basicBlock );
+	 
+	// 6. Find the DATA block to write
+	BBindex = LSeek/512;						
+	dataBlock = [SCRATCHPAD + BBindex];			// Data block number to which we have to write	
+	
+	// 7. Validate dataBlock => If -1 the allocate new block
+	if ( dataBlock == -1) then 
+
+		// whether the file already has 256 data blocks
+		if(BBindex>=256) then 
+			[physicalSP - 2] = -1;
+			ireturn;
+		endif;
+	
+		DFLindex = 24;
+		while( DFLindex < 448 && ([DISK_LIST + DFLindex] != 0)) do
+			DFLindex = DFLindex + 1;
+		endwhile;
+		
+		if(DFLindex == 448) then
+			[physicalSP - 2] = -1;
+			ireturn;
+		else
+			dataBlock = DFLindex;						// DFLindex is the new datablock
+			[DISK_LIST + DFLindex] = 1;					// Set that entry in DFL as allocated
+			[SCRATCHPAD + BBindex] = dataBlock;				// Write this new data block number to basic block
+			[FAT + FATindex * 8 + 1] = [FAT + FATindex * 8 + 1] + 512; 	// Update filesize
+			store( 1, basicBlock);						// Store basic block back to disk
+			store( 5, 19);							// Store FAT to disk
+			store( 6, 20);							// Store FAT to disk
+		endif;
+	endif;
+	
+	// 8 . Load the datablock to SCRATCHPAD and write to it
+	load( 1, dataBlock );						// Load dataBlock to scratchpad
+	offset = LSeek % 512;						// get the offset (place to write in the data block)
+	[SCRATCHPAD + offset] = wordToWrite;				// write it
+	store( 1, dataBlock);						// Store the block back to the disk
+
+	// 9 . Update the LSEEK position in PPOFT
+	[ currentPCB + 15 + fileDescriptor*2 + 1] = [ currentPCB + 15 + fileDescriptor*2 + 1] + 1; 
+	
+	[physicalSP - 2] = 0;
+	ireturn ;
+endif;
+				
+		
+		

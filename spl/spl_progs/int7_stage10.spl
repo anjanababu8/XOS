@@ -1,0 +1,178 @@
+alias physicalSP S0;
+alias sysCallNo S1;
+alias currentPID S2;
+alias currentPCB S3;
+alias nextProcess S4;
+alias i S5;
+alias SWOFTindex S6;
+alias nextPCB S7;
+alias newphysicalSP S8;
+alias waitingPID S9;
+alias counter S10;
+
+physicalSP = [PTBR + 2*(SP/512)]*512 + SP%512;
+sysCallNo = [physicalSP - 1];
+
+currentPID = (PTBR-1024)/8;
+currentPCB = READY_LIST + currentPID*32;
+
+if(sysCallNo == 10) then
+	// WAKING UP ALL OTHER PROCESS WAITING FOR THIS PROCESS
+	i = 0;
+	while( i < 32) do
+		if ( [READY_LIST + i*32 + 1] == 100 + currentPID) then
+			[READY_LIST + i*32 + 1] = 1;
+		endif;
+		i = i + 1;
+	endwhile;
+
+	// FIND NEXT PROCESS TO EXECUTE
+	nextProcess = 0;
+	while(nextProcess < 32 && [READY_LIST + nextProcess*32 + 1] != 1) do
+		nextProcess = nextProcess + 1;
+	endwhile;
+
+	
+	if(nextProcess == 32) then
+		halt;
+	endif;
+
+	
+	// CLOSE ALL FILES OPENED BY CURRENT PROCESS		
+	i = 0;
+	while(i<8) do
+		SWOFTindex = [currentPCB + 15 + i*2];
+		if ( SWOFTindex != -1) then 
+			[FILE_TABLE + SWOFTindex*2 + 1] = [FILE_TABLE + SWOFTindex*2 + 1] - 1;
+			if ([FILE_TABLE + SWOFTindex*2 + 1] == 0) then
+				[FILE_TABLE + SWOFTindex*2] = -1;			// Invalidate the entry if count becomes 0	
+			endif;
+			
+			//Invalidate the PPOFT entries
+			[currentPCB + 15 + i*2 + 0] = -1;			
+			[currentPCB + 15 + i*2 + 1] = -1;
+		endif;
+		i = i + 1;
+	endwhile;
+
+	// TERMINATE STATE
+	[currentPCB + 1] = 0;
+		
+	// FREE PAGES .. UPDATE MEMLIST && DFL
+	i = 0;
+	while(i<4) do
+		if([PTBR + i*2 + 1]=="01" || [PTBR + i*2 + 1]=="11") then
+			[MEM_LIST + [PTBR + i*2]] = [MEM_LIST + [PTBR + i*2]] - 1 ;
+		else
+			if([PTBR + i*2]>=448 && [PTBR + i*2]<=511) then
+				[DISK_LIST + [PTBR + i*2]] = [DISK_LIST + [PTBR + i*2]] - 1;
+			endif;
+		endif;
+		[PTBR + i*2 + 0] = -1;
+		[PTBR + i*2 + 1] = "00";
+		i = i + 1;
+	endwhile;
+	store(6,20);				//commit DFL
+
+	// SCHEDULER 
+	i=0;
+	counter = currentPCB + 32;
+	if(counter == READY_LIST + 32*32) then
+		counter = READY_LIST;
+	endif;
+	while(i<=32) do
+		if([counter + 1] == 1) then 
+			nextPCB = counter;		
+			break;
+ 		endif;
+		if(counter == (READY_LIST + 32*31)) then
+			counter = READY_LIST;
+		else
+			counter = counter + 32;
+		endif;		
+		i = i+1;
+	endwhile;
+	
+	// go to below
+endif;
+
+if ( sysCallNo == 13) then
+	waitingPID = [physicalSP - 3];
+
+	// TERMINATED PROCESS && RUNNING PROCESS(only 1 running process) => INVALID WAITING 
+	if( [READY_LIST + waitingPID*32 + 1] == 0 || [READY_LIST + waitingPID*32 + 1] == 2 ) then	
+		[physicalSP - 2] = -1;
+		print "error wait";
+		ireturn;
+	endif;	
+
+	// SAVING THE CONTEXT
+	[currentPCB + 1] = 100 + waitingPID;
+	[currentPCB + 2] = BP;
+	[currentPCB + 3] = SP - 1; 
+	[currentPCB + 4] = [physicalSP];
+	[currentPCB + 5] = PTBR;
+	[currentPCB + 6] = PTLR; 
+	[currentPCB + 7] = R0; 
+	[currentPCB + 8] = R1; 
+	[currentPCB + 9] = R2; 
+	[currentPCB + 10] = R3; 
+	[currentPCB + 11] = R4; 
+	[currentPCB + 12] = R5; 
+	[currentPCB + 13] = R6; 
+	[currentPCB + 14] = R7;
+	
+	// SCHEDULER 
+	i=0;
+	counter = currentPCB + 32;
+	if(counter == READY_LIST + 32*32) then
+		counter = READY_LIST;
+	endif;
+	while(i<=32) do
+		if([counter + 1] == 1) then // || [counter + 1] == 100 + currentPID) then 
+			nextPCB = counter;		
+			break;
+ 		endif;
+		if(counter == (READY_LIST + 32*31)) then
+			counter = READY_LIST;
+		else
+			counter = counter + 32;
+		endif;		
+		i = i+1;
+	endwhile;
+
+	// go to below
+endif;
+
+if(sysCallNo == 10 || sysCallNo == 13) then
+	BP = [nextPCB + 2];
+	SP = [nextPCB + 3];
+	PTBR = [nextPCB + 5];
+	PTLR = [nextPCB + 6];
+	R0 = [nextPCB + 7];
+	R1 = [nextPCB + 8];	
+	R2 = [nextPCB + 9];	
+	R3 = [nextPCB + 10];
+	R4 = [nextPCB + 11];
+	R5 = [nextPCB + 12];
+	R6 = [nextPCB + 13];
+	R7 = [nextPCB + 14];
+	SP = SP + 1;
+	newphysicalSP = ([PTBR + 2 * (SP / 512)] * 512) + (SP % 512); 
+	[newphysicalSP] = [nextPCB + 4];          // IP field value of PCB on the stack 
+	[nextPCB + 1] = 2;
+endif;		
+
+if( sysCallNo == 14) then
+	// SIGNAL ALL PROCESS WAITING FOR CURRENT PROCESS => SET THEIR STATE'S TO READY
+	i = 0;
+	while(i<32) do
+		if( [READY_LIST + i*32 + 1] == 100 + currentPID ) then
+			[READY_LIST + i*32 + 1] = 1;
+		endif;
+		i = i + 1;
+	endwhile;
+endif;
+
+[physicalSP - 2] = 0;
+ireturn;

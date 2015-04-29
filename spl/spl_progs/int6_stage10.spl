@@ -1,0 +1,123 @@
+alias physicalSP S0;
+alias sysCallNo S1;
+alias fileName S2;
+alias FATindex S3;
+alias basicBlock S4;
+alias codeBlocks S5;
+alias i S6;
+alias codePages S7;
+alias currentPID S8;
+alias currentPCB S9;
+alias SWOFTindex S10;
+alias j S11;
+alias pid S12;
+alias ppid S13;
+
+
+physicalSP = [PTBR + 2*SP/512]*512 + SP%512;
+sysCallNo = [physicalSP - 1];
+
+currentPID = (PTBR - 1024)/8;
+currentPCB = READY_LIST + currentPID*32;
+
+if(sysCallNo == 9) then					//exec("filename")
+	// 1. Search for the file in FAT
+	fileName = [physicalSP - 3];
+	FATindex = 0;
+
+	while(FATindex<64 && [FAT + FATindex*8]!=fileName) do
+		FATindex = FATindex + 1;
+	endwhile;
+
+	if(FATindex==64) then
+		[physicalSP - 2] = -1;
+		ireturn;
+	endif;
+
+
+	// DECREMENT THE COUNTS
+	i = 0;			
+	while(i<3) do	
+		if ([PTBR + i*2 + 1] == "01" || [PTBR + i*2 + 1] == "11") then					
+			[MEM_LIST + [PTBR + i*2]] = [MEM_LIST + [PTBR + i*2]] - 1;	
+		else
+			if ([PTBR + i*2] >=448 && [PTBR + i*2]<=511) then           // disk block in swap area
+				[DISK_LIST + [PTBR + i*2]] = [DISK_LIST + [PTBR + i*2]] - 1;
+			endif;
+		endif;
+		i = i + 1;
+	endwhile;
+	store(6,20);				//commit DFL back
+
+	// SET UP THE PAGE TABLE
+	basicBlock = [FAT + FATindex*8 + 2];
+	load(1,basicBlock);
+
+					codeBlocks = 0;
+					i = 0;
+					while(i < 256) do 
+						if([512 + i] != -1 && [512 + i] != "") then
+							codeBlocks = codeBlocks + 1;
+						endif;
+						i = i + 1;
+					endwhile;
+
+					// maximum 3 code blocks for .exe files
+					if( codeBlocks > 3) then
+						[physicalSP - 2] = -1;
+						ireturn;
+					endif;
+	 	
+	i = 0;
+	j = 0;
+	while(i<256 && j<3) do
+		if([512 + i] != -1 && [512 + i] != "") then
+			[PTBR + j*2 + 0] = [512 + i];
+			[PTBR + j*2 + 1] = "00";
+			j = j + 1;
+		endif;
+		i = i + 1; 
+	endwhile;
+
+	while(j<3) do
+		[PTBR + j*2 + 0] = -1;
+		[PTBR + j*2 + 1] = "00";
+		j = j + 1;
+	endwhile;
+
+	// 6. Close files opened by current process
+	currentPID = (PTBR - 1024)/8;
+	currentPCB = READY_LIST + currentPID*32;
+	
+	i = 0;
+	while(i<8) do
+		SWOFTindex = [currentPCB + 15 + i*2];
+		if ( SWOFTindex != -1) then 
+			[FILE_TABLE + SWOFTindex*2 + 1] = [FILE_TABLE + SWOFTindex*2 + 1] - 1;
+			if ([FILE_TABLE + SWOFTindex*2 + 1] == 0) then
+				[FILE_TABLE + SWOFTindex*2] = -1;			// Invalidate the entry if count becomes 0	
+			endif;
+			
+			//Invalidate the PPOFT entries
+			[currentPCB + 15 + i*2 + 0] = -1;			
+			[currentPCB + 15 + i*2 + 1] = -1;
+		endif;
+		i = i + 1;
+	endwhile;
+
+	// 7. Set SP
+	SP = 3*512;
+	physicalSP = ([PTBR + 2 * (SP / 512)] * 512) + (SP % 512);
+	[physicalSP]=0;							// IP = 0
+	ireturn;
+endif;
+
+if( sysCallNo == 11) then
+	[physicalSP - 2] = currentPID;
+	ireturn;
+endif;
+
+if( sysCallNo == 12) then	
+	[physicalSP - 2] = [currentPCB + 31] ;
+	ireturn;
+endif;

@@ -1,0 +1,159 @@
+alias physicalSP S0;
+alias sysCallNo S1;
+alias fileName S2;
+alias DFLindexBB S3;
+alias FATindex S4;
+alias counterBasic S5;
+alias SWOFTindex S7;
+alias basicBlock S8;
+alias dataBlock S9;
+alias numData S10;
+alias entryBasic S11;
+
+physicalSP = ([PTBR + 2 * (SP / 512)] * 512) + (SP % 512);
+
+sysCallNo = [physicalSP - 1];
+fileName = [physicalSP-3];					// Argument fetched to a register
+
+/////// WRONG OUTPUT when DFL is full and there is an entry in FAT => search FAT first
+// Searches DFL for free entry and allocate it for Basic Block
+// Creates a new Fat entry 
+if(sysCallNo==1) then						// CREATE(fileName)
+	// 1. Search DFL for free Block => if YES then its the Basic Block 
+	DFLindexBB = 24;
+
+	while(DFLindexBB < 448 && [DISK_LIST + DFLindexBB]!=0)do
+		DFLindexBB = DFLindexBB + 1;
+	endwhile;
+
+	if(DFLindexBB==448)then
+		[physicalSP-2]=-1;
+		ireturn;
+	endif;
+	
+	// 2. Search incore-FAT to check whether the file already exists 	
+	FATindex=0;
+	while(FATindex < 64 && ([FAT + FATindex*8] != fileName))do
+		FATindex = FATindex + 1;	
+	endwhile;
+	
+	if([FAT + FATindex*8] == fileName) then
+			[physicalSP-2]=0;
+			ireturn;
+	endif;
+	
+	// 3. Search incore-FAT for free entry
+	FATindex=0;
+	while(FATindex < 64 && ([FAT + FATindex*8 + 2] != -1))do
+		FATindex = FATindex + 1;	
+	endwhile;
+	if(FATindex==64)then
+		[physicalSP-2]=-1;
+		ireturn;
+	endif;			
+	
+	// 4. Set up the FAT entries
+	[FAT + FATindex*8 + 0] = fileName;
+	[FAT + FATindex*8 + 1] = 0;					// File Size = 0
+	[FAT + FATindex*8 + 2] = DFLindexBB;
+
+	// 5. Initialize basic block entries to -1 => No data blocks
+	//    For that load it into SCRATCHPAD and edit
+	//    After editting store it back to disk
+	load(1,DFLindexBB);
+	counterBasic=0;
+	while( counterBasic < 256 ) do
+	      [SCRATCHPAD + counterBasic] = -1;
+	      counterBasic = counterBasic + 1;
+	endwhile;
+	store(1,DFLindexBB);
+
+	// 6. DFL entry of basic block set to 1 => it is used
+	[DISK_LIST + DFLindexBB] = 1;
+
+	// 7. FAT and DFL is updated so store it back to disk   (( Disk Updation is costly so in real OS it is not done then and there))
+	store(5,19);
+	store(6,20);
+
+	[physicalSP -2]=0;
+	ireturn;
+endif;
+
+// Delete possible only if an entry in FAT is there and no SWOFT entry  
+// If YES the mark basic and data block entries in DFL as unused
+// Invalidate FAT entry
+if(sysCallNo == 4) then								// DELETE
+	
+	// 1. Search in FAT whether the file exists
+	FATindex = 0;
+	while( FATindex < 64 && [FAT + FATindex*8 + 0] != fileName) do
+			FATindex = FATindex + 1;
+	endwhile;
+	if(FATindex == 64) then
+		[physicalSP - 2] = -1;
+		ireturn;
+	endif;
+	
+	// 2. Search in SWOFT whether the file is opened
+	SWOFTindex = 0;
+	while( SWOFTindex < 64 && ([FILE_TABLE + SWOFTindex*2 + 0] != FATindex)) do
+			SWOFTindex = SWOFTindex + 1;
+	endwhile;
+	if( SWOFTindex < 64) then						// File opened by some process
+		[physicalSP-2] = -1;
+		ireturn;
+	endif;
+	
+	// 3. Steps to DELETE the file
+		// a. Load BASIC block to SCRATCHPAD
+		basicBlock = [FAT + FATindex*8 + 2];
+		load(1,basicBlock);
+
+		// b. Get the DATA block numbers from BASIC block
+		// c. Load the DATA block to SCRATCHPAD and set each word to ""(empty string)
+		//    Store the DATA block back to DISK
+		//    Make the corresponding DFL entry to unused	
+		
+		entryBasic = 0;
+		while( entryBasic < 256 && ([SCRATCHPAD + entryBasic] != -1)) do
+			dataBlock = [SCRATCHPAD + entryBasic];
+			load(1, dataBlock);			
+			
+			numData = 0;
+			while(numData < 512) do
+				[SCRATCHPAD + numData] = "";
+				numData = numData + 1;
+			endwhile;
+			
+			store(1, dataBlock);
+			[DISK_LIST + dataBlock] = 0;
+			
+			load(1,basicBlock);
+			entryBasic = entryBasic + 1;
+		endwhile;
+
+		// d. Erase the content of BASIC block
+	        //    Store it back to disk
+		//    Set the DFL entry for BASIC block to 0 (unused)
+		
+		entryBasic = 0;
+		while(entryBasic < 256 && [SCRATCHPAD + entryBasic] != -1) do
+			[SCRATCHPAD + entryBasic] = "";
+			entryBasic = entryBasic + 1;
+		endwhile;	
+		
+		store(1,basicBlock);
+		[DISK_LIST + basicBlock] = 0;
+
+		// e. Invalidate FAT entries(FileName, FileSize and Basic Block Number)
+		[FAT + FATindex*8 + 0] = -1;
+		[FAT + FATindex*8 + 1] = 0;		
+		[FAT + FATindex*8 + 2] = -1;
+
+	// 4. Store back FAT and DFL
+	store(5,19);
+	store(6,20);
+		
+	[physicalSP - 2] = 0;
+	ireturn;
+endif;

@@ -1,0 +1,130 @@
+alias physicalSP S0;
+alias sysCallNo S1;
+alias freePCB S2;
+alias validPageCount S3;
+alias i S4;
+alias checkFreePage S5;
+alias childPTBR S6;
+alias wordCount S7;
+alias childPCB S8;
+alias parentPID S9;
+alias parentPCB S10;
+alias SWOFTindex S11;
+alias childPhysicalSP S12;
+
+physicalSP = ([PTBR + 2*(SP/512)]*512) + (SP % 512);
+sysCallNo = [physicalSP - 1];
+		
+parentPID = (PTBR - 1024)/8;
+parentPCB = READY_LIST + parentPID*32;
+
+if(sysCallNo == 8) then
+	
+	//GET FREE PCB FOR CHILD (FREE PCB => STATE 0 - terminated/no process )
+	freePCB = 0;
+	while( [READY_LIST +  freePCB*32 + 1] != 0  && freePCB<32) do
+		freePCB = freePCB + 1;
+	endwhile;
+	if(freePCB == 32) then
+		[physicalSP - 2] = -1;
+		ireturn;
+	endif;
+	childPCB = READY_LIST + freePCB*32;
+	[childPCB + 0] = freePCB;   			 // childPID = freePCB (in real OS not so)
+	
+	//DUPLICATE THE VALID PAGES
+	//.....GET PAGE COUNT.....
+	validPageCount = 0;
+	i = 0;
+	while(i<4) do
+		if([PTBR + i*2 + 1] == 01 || [PTBR + i*2 + 1] == 11) then
+			validPageCount = validPageCount + 1;	
+		endif;
+		i = i + 1;
+	endwhile;
+
+	//....CHECK MEMLIST FOR AVALABILITY....
+	i = 29;
+	checkFreePage = 0;
+	while(i<64  && checkFreePage != validPageCount) do
+		if([MEM_LIST + i] == 0) then
+			checkFreePage = checkFreePage + 1;
+		endif;
+		i = i + 1;
+	endwhile;	
+	if(checkFreePage < validPageCount) then
+		[physicalSP - 2] = -1;
+		ireturn;
+	endif;
+
+	//...REPLICATE THE PAGE TABLE...
+	childPTBR = 1024 + freePCB*8;
+	i = 0;			
+	while(i<4) do				
+		checkFreePage = 29;
+		if ([PTBR + i*2 + 1] == 01 || [PTBR + i*2 + 1] == 11) then					
+			while(checkFreePage<64 && [MEM_LIST+ checkFreePage]!=0) do
+				checkFreePage = checkFreePage + 1;
+			endwhile;
+		
+			[MEM_LIST + checkFreePage] = 1;	
+			[childPTBR + i*2 + 0] = checkFreePage;
+			[childPTBR + i*2 + 1] = [PTBR + i*2 + 1];
+							
+			// copy each page entry
+			wordCount=0;
+			while(wordCount < 512) do
+				[checkFreePage*512 + wordCount] = [[PTBR + i*2]*512 + wordCount];
+				wordCount = wordCount + 1;
+			endwhile;
+		else
+			[childPTBR + i*2 + 0] = [PTBR + i*2 + 0];
+			[childPTBR + i*2 + 1] = [PTBR + i*2 + 1];	
+		endif;
+		i = i + 1;
+	endwhile;
+
+	//UPDATE CHILD PCB	
+	[childPCB + 0] = freePCB;
+	[childPCB + 1] = 1;	            // child is ready.
+	[childPCB + 2] = BP;
+	[childPCB + 3] = SP - 1;	    // (Why?)
+	[childPCB + 4] = [physicalSP];      // logical IP
+	[childPCB + 5] = childPTBR;
+	[childPCB + 6] = PTLR;
+	[childPCB + 7] = R0;
+	[childPCB + 8] = R1;
+	[childPCB + 9] = R2;
+	[childPCB + 10] = R3;
+	[childPCB + 11] = R4;
+	[childPCB + 12] = R5;
+	[childPCB + 13] = R6;
+	[childPCB + 14] = R7;
+	[childPCB + 31] = parentPID;		// extra
+		
+	i = 0;
+	while(i < 8) do
+		[childPCB + 15 + i*2 + 0] = [parentPCB + 15 + i*2 + 0];
+		[childPCB + 15 + i*2 + 1] = [parentPCB + 15 + i*2 + 1];
+
+		SWOFTindex = [parentPCB + 15 + i*2];
+		if(SWOFTindex != -1) then
+			[FILE_TABLE + SWOFTindex*2 + 1] = [FILE_TABLE + SWOFTindex*2 + 1] + 1;
+		endif;
+		i = i + 1;
+	endwhile;				
+				
+	[physicalSP - 2] = freePCB;                                      // return parent childPID
+	childPhysicalSP = [childPTBR + 2*((SP -1)/512)]*512 + (SP-1)%512; 
+	[childPhysicalSP - 1] = -2;
+	ireturn;
+endif;	
+
+
+			
+		
+
+
+
+	
+		

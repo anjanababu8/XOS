@@ -1,0 +1,137 @@
+alias current_PID S0;
+alias current_PCB S1;
+alias physicalSP S2;
+alias newPCB S3;
+alias counter S4;
+alias i S5;
+alias newphysicalSP S6;
+alias freePage S7;
+alias checkPTBR S8;
+alias j S9;
+alias done S10;
+alias entry S11;
+
+physicalSP = ([PTBR + 2*(SP/512)]*512 + SP % 512);
+current_PID = (PTBR - 1024)/8;
+current_PCB = READY_LIST + 32 * current_PID;
+
+//SAVING THE CONTEXT
+[current_PCB + 1] = 1; //When TIMER schedules another process for execution, this process will be ready and waiting for the CPU. 
+[current_PCB + 2] = BP;
+[current_PCB + 3] = SP - 1;
+[current_PCB + 4] = [physicalSP]; // Save IP of current process in the PCB from the stack
+[current_PCB + 5] = PTBR;
+[current_PCB + 6] = PTLR; 
+[current_PCB + 7] = R0;
+[current_PCB + 8] = R1;
+[current_PCB + 9] = R2;
+[current_PCB + 10] = R3;
+[current_PCB + 11] = R4;
+[current_PCB + 12] = R5;
+[current_PCB + 13] = R6;
+[current_PCB + 14] = R7;
+
+i=0;
+counter = current_PCB + 32;
+if(counter == READY_LIST + 32*32) then
+	counter = READY_LIST;
+endif;
+while(i<=32) do
+	if([counter + 1] == 1) then 
+		newPCB = counter;		
+		break;
+ 	endif;
+	if(counter == (READY_LIST + 32*31)) then
+		counter = READY_LIST;
+	else
+		counter = counter + 32;
+	endif;		
+	i = i+1;
+endwhile;
+
+//CONTEXT SWITCH
+BP=[newPCB+2];
+SP=[newPCB+3];
+R0=[newPCB+7];
+R1=[newPCB+8];
+R2=[newPCB+9];
+R3=[newPCB+10];
+R4=[newPCB+11];
+R5=[newPCB+12];
+R6=[newPCB+13];
+R7=[newPCB+14];
+PTBR=[newPCB+5];
+PTLR=[newPCB+6];
+[newPCB + 1] = 2; // Set STATE to RUNNING
+
+//..............STACK VALIDATION...........
+if([PTBR + 6]>=448 && [PTBR + 6]<=511) then			// stack in SWAP area
+	freePage = 26;
+	while(freePage<64 && [MEM_LIST + freePage]!=0) do
+		freePage = freePage + 1;
+	endwhile;
+	if(freePage<64) then
+		[MEM_LIST + freePage] = 1;
+	else			//.........PAGE REPLACEMENT ALGORITHM => Second Chance Algorithm
+		checkPTBR = PTBR + 8;
+		done = 0;
+		i=0;		
+		j = 0;			
+		while(1==1) do			// Max 2 rounds
+			while(i!=4) do
+				if([MEM_LIST + [checkPTBR + i*2]]<=1 &&	[checkPTBR + i*2 + 1] == "01") then
+					freePage = [checkPTBR + i*2];
+					done = 1;
+					break;
+				endif;	
+				if([checkPTBR + i*2 + 1] == "11") then
+					[checkPTBR + i*2 + 1] = "01";
+				endif;	
+				i = i + 1;
+			endwhile;
+			if(done==1)then
+				break;
+			endif;
+			if(checkPTBR == 1272)then
+				checkPTBR = PAGE_TABLE;
+			else
+				checkPTBR = checkPTBR + 8;
+			endif;
+			i = 0;
+		endwhile;
+		
+		//.....SEARCH THE SWAP AREA FOR FREE BLOCK...
+		j = 448;
+		while(j<512 && [DISK_LIST + j]!=0) do
+			j = j + 1;
+		endwhile;
+		if(j==512) then					// SWAP AREA FULL4
+			SP = SP + 1; // Put syscall number
+			physicalSP = ([PTBR + 2 * (SP / 512)] * 512) + (SP % 512);
+			[physicalSP] = 10;
+			inline "JMP 11776";
+		else
+			store(freePage,j);
+			[DISK_LIST + j] = 1;
+			store(6,20);
+
+			[checkPTBR + i*2 + 0] = j;			// Update Victim Page entry in PT with disk block number
+			[checkPTBR + i*2 + 1] = "00";
+		endif;
+	endif;
+	
+	//........GOT A PAGE................
+	breakpoint;
+	entry = [PTBR + 6];
+	load(freePage,entry);
+	[PTBR + 6 + 0] = freePage;
+	[PTBR + 6 + 1] = "11";
+	if(entry>=448 && entry<=511) then			// BLOCK IN SWAP AREA
+		[DISK_LIST + entry] = [DISK_LIST + entry] - 1;
+	endif;
+endif;
+
+SP=SP + 1;
+newphysicalSP = ([PTBR + 2 * (SP / 512)] * 512) + (SP % 512);
+[newphysicalSP] = [newPCB + 4]; // Stores IP field value of PCB on the stack 
+ireturn;

@@ -1,0 +1,135 @@
+alias physicalSP S0;
+alias sysCallNo S1;
+alias fileName S2;
+
+alias FATindex S3;
+alias SWOFTindex S4;
+
+alias currentPID S5;
+alias currentPCB S6;
+
+alias PPOFTindex S7;
+
+alias fileDescriptor S8;
+
+physicalSP = ([PTBR + 2*(SP/512)] * 512) + (SP % 512); 
+
+sysCallNo = [physicalSP - 1];
+
+///////Do not update SWOFT as soon as you get index b'coz PPOFT can be full!!!	
+if(sysCallNo == 2) then							// OPEN 
+	fileName = [physicalSP -3];					// Argument fetched to register
+
+	// 1. Search in incore-FAT whether such a file exists => if YES get FATindex else return -1
+	FATindex = 0;
+	while( FATindex < 64 && ([ FAT + FATindex*8 + 0] != fileName )) do 
+			FATindex = FATindex + 1;
+	endwhile;
+
+	if( FATindex == 64) then
+		[physicalSP - 2] = -1;
+		ireturn;
+	endif;
+
+	// 2. Search in SWOFT whether the file is opened => if YES get SWOFTindex
+	SWOFTindex = 0;
+	while( SWOFTindex < 64 && ([FILE_TABLE + SWOFTindex*2] != FATindex)) do
+			SWOFTindex = SWOFTindex + 1;
+	endwhile;
+
+	if([FILE_TABLE + SWOFTindex*2] == FATindex) then		// File already opened
+		// 3. Search for a free space in PPOFT => if YES then make an entry else return -1; 
+		// Update SWOFT => increment the file count
+		currentPID = (PTBR - 1024)/8 ; 
+		currentPCB = READY_LIST + currentPID*32;
+	
+		PPOFTindex = 0;
+		while(PPOFTindex < 8 && ([currentPCB + 15 + PPOFTindex*2] != -1) )do 
+				PPOFTindex = PPOFTindex + 1;
+		endwhile;
+		if(PPOFTindex == 8) then 
+			[physicalSP - 2] = -1;
+			ireturn;
+		else
+			[currentPCB + 15 + PPOFTindex*2] = SWOFTindex;
+			[currentPCB + 15 + PPOFTindex*2 + 1] = 0;
+
+			
+			[FILE_TABLE + SWOFTindex*2 + 1] = [FILE_TABLE + SWOFTindex*2 + 1] + 1;
+
+			[physicalSP - 2] = PPOFTindex;
+			ireturn;
+		endif;
+	endif;	
+
+	if(SWOFTindex == 64) then				// Didnt get SWOFTindex => either full/file not opened before
+		SWOFTindex = 0;
+		while( SWOFTindex < 64 && [FILE_TABLE + SWOFTindex*2] != -1) do
+			SWOFTindex = SWOFTindex + 1;
+		endwhile;
+
+		// 3. Search for a free space in PPOFT => if YES then make an entry else return -1; 
+		// Update SWOFT => Make a new entry => FATindex , File Count = 0
+		if(SWOFTindex == 64) then
+			[physicalSP - 2] = -1;
+			ireturn;
+		else			
+			currentPID = (PTBR - 1024)/8 ; 
+			currentPCB = READY_LIST + currentPID*32;
+	
+			PPOFTindex = 0;
+			while(PPOFTindex < 8 && ([currentPCB + 15 + PPOFTindex*2] != -1) )do 
+				PPOFTindex = PPOFTindex + 1;
+			endwhile;
+			if(PPOFTindex == 8) then 
+				[physicalSP - 2] = -1;
+				ireturn;
+			else
+				[currentPCB + 15 + PPOFTindex*2] = SWOFTindex;
+				[currentPCB + 15 + PPOFTindex*2 + 1] = 0;
+
+			
+				[FILE_TABLE + SWOFTindex*2] = FATindex;
+				[FILE_TABLE + SWOFTindex*2 + 1] = 1;
+
+				[physicalSP - 2] = PPOFTindex;
+				ireturn;	
+			endif;		
+		endif;
+	endif;	
+endif;
+
+// Specific instance of file is to be removed from PPOFT 
+// Decrement the file count in SWOFT by 1
+if (sysCallNo == 3) then							// CLOSE
+	fileDescriptor = [physicalSP - 3];					// Argument fetched to register
+
+	// 1. Validation of FILE-DESCRIPTOR (0 -7)
+	if (fileDescriptor<0 || fileDescriptor>7) then
+		[physicalSP - 2] = -1;
+		ireturn;
+	endif;
+	
+	// 2. Validation of SWOFT-index
+	currentPID = (PTBR - 1024)/8;
+	currentPCB = READY_LIST + currentPID*32;
+	
+	SWOFTindex = [currentPCB + 15 + fileDescriptor*2];
+	if ( SWOFTindex == -1) then 
+		[physicalSP - 2] = -1;
+		ireturn;
+	else
+		// 3. Decrement the Filecount and if it becomes zero then invalidate the entry
+		[FILE_TABLE + SWOFTindex*2 + 1] = [FILE_TABLE + SWOFTindex*2 + 1] - 1;
+		if ([FILE_TABLE + SWOFTindex*2 + 1] == 0) then
+			[FILE_TABLE + SWOFTindex*2] = -1;			// Invalidate the entry if count becomes 0	
+		endif;
+
+		// 4. Invalidate the PPOFT entries
+		[currentPCB + 15 + fileDescriptor*2] = -1;			
+		[currentPCB + 15 + fileDescriptor*2 + 1] = -1;
+		
+		[physicalSP - 2] = 0;
+		ireturn ;
+	endif;
+endif;

@@ -1,0 +1,123 @@
+alias Cause S0;
+alias VPagenum S1;
+alias IP_addr S2;
+alias physicalSP S3;
+alias freePage S4;
+alias i S5;
+alias checkPTBR S6;
+alias EntryCount S7;
+alias j S8;
+alias entry S9;
+alias done S10;
+
+// DETAILS FROM EFR REGISTER
+Cause = EFR % 10;				// Gets value of cause field (size 1 char)
+VPagenum = (EFR / 10) % 100;			// Gets value of BadVAddr
+IP_addr = (EFR / 1000);				//Gets value of IP at the point of exception
+
+
+if(Cause!= 0) then
+	if(Cause==1) then
+		print "Illegal Instr";
+	endif;
+	if(Cause==2) then
+		print "Illegal MemAccess";
+	endif;
+	if(Cause==3) then
+		print "Arithmetic Excep";
+	endif;
+	if(Cause==4) then
+		print "Illegal Operands";
+	endif;
+
+	inline "MOV R0, 10";
+		SP = SP + 1; // Put syscall number
+		physicalSP = ([PTBR + 2 * (SP / 512)] * 512) + (SP % 512);
+		[physicalSP] = 10;
+		SP = SP + 1;
+		inline "JMP 11776";
+else
+	//print "Page Fault";
+	if([PTBR + VPagenum*2] == -1) then
+		print " Illegal addr";
+		SP = SP + 1; // Put syscall number
+		physicalSP = ([PTBR + 2 * (SP / 512)] * 512) + (SP % 512);
+		[physicalSP] = 10;
+		SP = SP + 1;
+		inline "JMP 11776";
+	endif;
+
+	freePage = 26;
+	while(freePage<64 && [MEM_LIST + freePage]!=0) do
+		freePage = freePage + 1;
+	endwhile;
+	if(freePage<64) then
+		[MEM_LIST + freePage] = 1;
+	else			//.........PAGE REPLACEMENT ALGORITHM => Second Chance Algorithm
+		i = VPagenum;
+		checkPTBR = PTBR;
+		done = 0;				
+		while(1==1) do			// Max 2 rounds
+			while(i!=4) do
+				if(i==3 && checkPTBR == PTBR)then
+					i = i + 1;
+				else
+					if([MEM_LIST + [checkPTBR + i*2]]<=1 &&	[checkPTBR + i*2 + 1] == "01") then
+						freePage = [checkPTBR + i*2];
+						done = 1;
+						break;
+					endif;	
+					if([checkPTBR + i*2 + 1] == "11") then
+						[checkPTBR + i*2 + 1] = "01";
+					endif;	
+					i = i + 1;
+				endif;
+			endwhile;
+			if(done==1)then
+				break;
+			endif;
+			if(checkPTBR == 1272)then
+				checkPTBR = PAGE_TABLE;
+			else
+				checkPTBR = checkPTBR + 8;
+			endif;
+			i = 0;
+		endwhile;
+		
+		//.....SEARCH THE SWAP AREA FOR FREE BLOCK...
+		j = 448;
+		while(j<512 && [DISK_LIST + j]!=0) do
+			j = j + 1;
+		endwhile;
+		if(j==512) then					// SWAP AREA FULL4
+			SP = SP + 1; // Put syscall number
+			physicalSP = ([PTBR + 2 * (SP / 512)] * 512) + (SP % 512);
+			[physicalSP] = 10;
+			SP = SP + 1;
+			inline "JMP 11776";
+		else
+			store(freePage,j);
+			[DISK_LIST + j] = 1;
+			store(6,20);
+
+			[checkPTBR + i*2 + 0] = j;			// Update Victim Page entry in PT with disk block number
+			[checkPTBR + i*2 + 1] = "00";
+		endif;
+	endif;
+	
+	//........GOT A PAGE................
+	entry = [PTBR + VPagenum*2];
+	load(freePage,entry);
+	[PTBR + VPagenum*2 + 0] = freePage;
+	[PTBR + VPagenum*2 + 1] = "11";
+	if(entry>=448 && entry<=511) then			// BLOCK IN SWAP AREA
+		[DISK_LIST + entry] = [DISK_LIST + entry] - 1;
+	endif;
+
+	SP = SP + 1; // To place the IP_addr which caused exception on stack and reexecute
+	physicalSP = ([PTBR + 2 * (SP / 512)] * 512) + (SP % 512);
+	[physicalSP] = IP_addr;
+	ireturn;
+endif;
+
+
